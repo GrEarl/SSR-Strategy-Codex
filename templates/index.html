@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SSR Strategy Codex</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;600;700&family=Manrope:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.1/cdn/themes/dark.css">
+  <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.1/cdn/shoelace-autoloader.js"></script>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+  <body class="sl-theme-dark">
+    <div class="bg-ornament"></div>
+    <div class="bg-ornament b"></div>
+    <div class="grid-overlay"></div>
+    <header class="hero">
+      <div class="hero-text">
+        <p class="eyebrow">LiveOps SSR Studio</p>
+      <h1>SSR Strategy Codex</h1>
+      <p class="lede">Local dashboard for evaluating live-ops strategies via Semantic Similarity Rating, inspired by the paper “LLMs Reproduce Human Purchase Intent via Semantic Similarity Elicitation of Likert Ratings.” Register personas, evaluation criteria, and prompt templates, then generate predictions with operational context and export rich PDF reports.</p>
+      <div class="hero-pills">
+        <sl-tag size="medium" pill variant="success">Operations context</sl-tag>
+        <sl-tag size="medium" pill variant="primary">Template-aware</sl-tag>
+        <sl-tag size="medium" pill variant="warning">Reproducible</sl-tag>
+        <sl-tag size="medium" pill variant="info">PDF report</sl-tag>
+      </div>
+    </div>
+    <div class="hero-actions">
+      <sl-card class="stat-card">
+        <p class="label">Purpose</p>
+        <p class="value">Instant SSR on intent</p>
+        <small>Automatic summaries and persona distributions</small>
+      </sl-card>
+      <sl-card class="stat-card glass">
+        <p class="label">Output</p>
+        <p class="value">JSON / PDF / charts</p>
+        <small>Export the underlying session files</small>
+      </sl-card>
+      </div>
+    </header>
+
+  <main>
+    <section class="command-bar">
+      <div>
+        <p class="label">Flow</p>
+        <h3>From setup to PDF in minutes</h3>
+        <p class="muted">Jump to creation, benchmarks, or exports without losing context.</p>
+        <div class="command-pills">
+          <button class="ghost" data-scroll="#setup-panel">Bootstrap</button>
+          <button class="ghost" data-scroll="#task-form">Queue task</button>
+          <button class="ghost" data-scroll="#benchmark-form">Benchmarks</button>
+          <button class="ghost" data-scroll="#session-list">Sessions</button>
+        </div>
+      </div>
+      <div class="command-actions">
+        <p class="muted">Live metrics</p>
+        <div class="pulse-row">
+          <div class="pulse-dot"></div>
+          <span id="refresh-clock">Updating</span>
+        </div>
+        <sl-button id="force-refresh" variant="default" size="small">Refresh now</sl-button>
+      </div>
+    </section>
+
+    <section class="overview-grid">
+      <div class="overview-card">
+        <div class="muted">Personas</div>
+        <div class="stat-line"><span id="persona-count">0</span><small>profiles</small></div>
+        <p class="muted">Demographic coverage to match the study.</p>
+      </div>
+      <div class="overview-card">
+        <div class="muted">Criteria</div>
+        <div class="stat-line"><span id="criterion-count">0</span><small>anchors</small></div>
+        <p class="muted">Likert anchors and questions in play.</p>
+      </div>
+      <div class="overview-card">
+        <div class="muted">Templates</div>
+        <div class="stat-line"><span id="template-count">0</span><small>prompts</small></div>
+        <p class="muted">Ops-aware instructions per scenario.</p>
+      </div>
+      <div class="overview-card highlight">
+        <div class="muted">Tasks</div>
+        <div class="stat-line"><span id="task-count">0</span><small>queued</small></div>
+        <p class="muted">Completed <span id="task-done">0</span> • Failed <span id="task-failed">0</span></p>
+      </div>
+    </section>
+
+    <sl-card class="panel highlight" id="setup-panel">
+      <div>
+        <p class="label">Fast track</p>
+        <h2>Quick setup</h2>
+        <p>Seed sample personas, criteria, and templates to try the workflow immediately. Existing data will be preserved.</p>
+        <div class="action-row">
+          <sl-button id="bootstrap-btn" variant="primary" size="large" pill>Load sample data</sl-button>
+          <div id="bootstrap-status" class="muted"></div>
+        </div>
+      </div>
+      <div class="badge">
+        <span>Reproducible</span>
+        <small>Fix seeds and similarity strategy</small>
+      </div>
+    </sl-card>
+
+    <section class="grid form-grid">
+      <sl-card class="panel" id="persona-section">
+        <div class="section-heading">
+          <div>
+            <p class="label">Players</p>
+            <h2>Persona registry</h2>
+          </div>
+          <p class="muted">Used to compute distributions by age and gender</p>
+        </div>
+        <form id="persona-form" class="stack">
+          <sl-input name="name" label="Name" required></sl-input>
+          <sl-input name="age" label="Age" type="number" min="10" max="120" required></sl-input>
+          <sl-input name="gender" label="Gender" required placeholder="Female / Male / Non-binary"></sl-input>
+          <sl-textarea name="notes" label="Notes" rows="2"></sl-textarea>
+          <sl-button variant="primary" submit>Add persona</sl-button>
+        </form>
+        <ul id="persona-list" class="list"></ul>
+      </sl-card>
+
+      <sl-card class="panel" id="criterion-section">
+        <div class="section-heading">
+          <div>
+            <p class="label">Metrics</p>
+            <h2>Evaluation criteria</h2>
+          </div>
+          <p class="muted">Clarify the Likert scale with anchors</p>
+        </div>
+        <form id="criterion-form" class="stack">
+          <sl-input name="label" label="Label" required placeholder="Retention intent"></sl-input>
+          <sl-textarea name="question" label="Question" rows="2" required>Would you keep playing this game after this initiative?</sl-textarea>
+          <sl-textarea name="anchors" label="Anchors (5 lines)" rows="6">{% for a in default_anchors %}{{ a }}
+{% endfor %}</sl-textarea>
+          <sl-button variant="primary" submit>Add criterion</sl-button>
+        </form>
+        <ul id="criterion-list" class="list"></ul>
+      </sl-card>
+
+      <sl-card class="panel" id="template-section">
+        <div class="section-heading">
+          <div>
+            <p class="label">Prompt</p>
+            <h2>Prompt templates</h2>
+          </div>
+          <p class="muted">Evaluation instructions grounded in ops context</p>
+        </div>
+        <form id="template-form" class="stack">
+          <sl-input name="name" label="Name" required placeholder="Ops baseline"></sl-input>
+          <sl-input name="description" label="Description" placeholder="e.g., LiveOps evaluation"></sl-input>
+          <sl-textarea name="content" label="Body" rows="4" placeholder="Share a candid view on retention and monetization impact."></sl-textarea>
+          <sl-button variant="primary" submit>Add template</sl-button>
+        </form>
+        <ul id="template-list" class="list"></ul>
+      </sl-card>
+    </section>
+
+    <sl-card class="panel" id="task-section">
+      <div class="section-heading">
+        <div>
+          <p class="label">Scenario</p>
+          <h2>Create SSR task</h2>
+        </div>
+        <p class="muted">Bundle stimulus text, optional image, and context to queue instantly</p>
+      </div>
+      <form id="task-form" class="task-grid">
+        <div class="stack">
+          <sl-input name="title" label="Title" required placeholder="Evaluate Golden Week event"></sl-input>
+          <sl-textarea name="stimulus_text" label="Stimulus text" rows="3" placeholder="Event outline or campaign details"></sl-textarea>
+          <label class="file-label">Image file<input name="image" type="file" accept="image/*"></label>
+          <sl-textarea name="image_description" label="Image description" rows="2" placeholder="Optional summary or notes about the image"></sl-textarea>
+          <sl-textarea name="guidance" label="Evaluation guidance" rows="2" placeholder="e.g., Be candid about promotion impact"></sl-textarea>
+          <sl-input name="session_label" label="Session label" placeholder="e.g., 2025-GW"></sl-input>
+          <sl-select name="prompt_template_id" id="template-select" label="Prompt template">
+            <sl-option value="">Not specified</sl-option>
+          </sl-select>
+        </div>
+        <div class="stack">
+          <div class="section-subheading">
+            <p class="label">Ops Context</p>
+            <h4>Operations context</h4>
+          </div>
+          <sl-input name="game_title" label="Game title" placeholder="e.g., Star Knights"></sl-input>
+          <sl-input name="genre" label="Genre" placeholder="RPG / Rhythm / Puzzle"></sl-input>
+          <sl-input name="target_metric" label="Target KPI" placeholder="Retention, ARPPU, etc."></sl-input>
+          <sl-input name="liveops_cadence" label="Event cadence" placeholder="Weekly / Monthly / Always-on"></sl-input>
+          <sl-input name="monetization" label="Monetization" placeholder="Gacha, battle pass, subscription"></sl-input>
+          <sl-textarea name="seasonality" label="Seasonality" rows="2" placeholder="Anniversary, holiday, collaboration, etc."></sl-textarea>
+          <sl-textarea name="notes" label="Notes" rows="2" placeholder="IP constraints, player sentiment, etc."></sl-textarea>
+          <div class="select-grid">
+            <div>
+              <h4>Select personas</h4>
+              <div id="persona-options" class="option-panel"></div>
+            </div>
+            <div>
+              <h4>Select criteria</h4>
+              <div id="criterion-options" class="option-panel"></div>
+            </div>
+          </div>
+          <div class="inline">
+            <sl-select name="similarity_method" label="Similarity strategy" value="tfidf">
+              <sl-option value="tfidf">TF-IDF</sl-option>
+              <sl-option value="uniform">Uniform (baseline)</sl-option>
+            </sl-select>
+            <sl-input name="run_seed" label="Seed" type="number" min="0" placeholder="For reproducibility"></sl-input>
+          </div>
+          <sl-button variant="primary" submit size="large">Queue task</sl-button>
+          <div id="task-status" class="muted"></div>
+        </div>
+      </form>
+    </sl-card>
+
+    <sl-card class="panel" id="results-section">
+      <div class="section-heading">
+        <div>
+          <p class="label">Results</p>
+          <h2>Tasks & results</h2>
+        </div>
+        <p class="muted">Export to PDF or re-queue to iterate quickly</p>
+      </div>
+      <div id="task-list"></div>
+    </sl-card>
+
+    <sl-card class="panel" id="benchmark-section">
+      <div class="section-heading">
+        <div>
+          <p class="label">Reproduction</p>
+          <h2>Match paper metrics</h2>
+        </div>
+        <p class="muted">Register human distributions to compare KS similarity and correlation attainment with the paper.</p>
+      </div>
+      <div class="benchmark-grid">
+        <form id="benchmark-form" class="stack">
+          <sl-input name="label" label="Study label" placeholder="e.g., Concept-01" required></sl-input>
+          <sl-input name="session_label" label="Session label" placeholder="Match task session (optional)"></sl-input>
+          <label class="label-inline">Criterion label
+            <input name="criterion_label" list="criterion-datalist" placeholder="Retention intent" required>
+            <datalist id="criterion-datalist">
+              {% for c in criteria %}
+              <option value="{{ c.label }}">{{ c.label }}</option>
+              {% endfor %}
+            </datalist>
+          </label>
+          <sl-textarea name="distribution" label="Human distribution" rows="3" placeholder="e.g., 0.05 0.1 0.2 0.4 0.25" required></sl-textarea>
+          <sl-input name="sample_size" label="Sample size" type="number" min="10" value="100"></sl-input>
+          <sl-button variant="primary" submit>Save benchmark</sl-button>
+        </form>
+        <div>
+          <h3>Benchmarks</h3>
+          <ul id="benchmark-list" class="list"></ul>
+          <div class="section-heading small">
+            <div>
+              <p class="label">Evaluation</p>
+              <h4>Correlation attainment</h4>
+            </div>
+            <sl-button id="evaluate-btn" variant="default">Recalculate</sl-button>
+          </div>
+          <p id="evaluation-summary" class="muted"></p>
+          <table class="table">
+            <thead>
+              <tr><th>Task</th><th>Session</th><th>Criterion</th><th>KS similarity</th><th>Human μ</th><th>Synthetic μ</th><th>n</th></tr>
+            </thead>
+            <tbody id="evaluation-table"></tbody>
+          </table>
+        </div>
+      </div>
+    </sl-card>
+
+    <sl-card class="panel" id="session-section">
+      <div class="section-heading">
+        <div>
+          <p class="label">Sessions</p>
+          <h2>Download Codex sessions</h2>
+        </div>
+        <p class="muted">Grab the raw ~/.codex/session/... files used to produce the predictions.</p>
+      </div>
+      <ul id="session-list" class="list"></ul>
+    </sl-card>
+
+    <sl-card class="panel" id="aggregate-section">
+      <div class="section-heading">
+        <div>
+          <p class="label">Aggregates</p>
+          <h2>Persona distribution</h2>
+        </div>
+        <p class="muted">Mean scores by gender/age across criteria</p>
+      </div>
+      <canvas id="aggregate-chart" width="400" height="150"></canvas>
+    </sl-card>
+  </main>
+
+  <script type="module" src="/static/main.js"></script>
+</body>
+</html>
