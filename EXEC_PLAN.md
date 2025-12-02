@@ -4,7 +4,7 @@
 
 ## Purpose / Big Picture
 
-消費者調査の代替として、論文「LLMs Reproduce Human Purchase Intent via Semantic Similarity Elicitation of Likert Ratings」で示されるSemantic Similarity Rating(SSR)手法をローカルで再現できるWebアプリを提供する。ユーザーはペルソナと評価基準を登録し、画像またはテキストの刺激を与えてSSR分析を実行できる。Codex execのようにAPIに依存せずローカルで完結し、年齢・性別別の集計やセッションファイルのダウンロードが可能になる。最新の改修では、ソーシャルゲーム運営戦略の評価やPDFレポート出力、簡単セットアップ、論文再現性向上のための設定を強化する。
+消費者調査の代替として論文「LLMs Reproduce Human Purchase Intent via Semantic Similarity Elicitation of Likert Ratings」のSSR手法をローカルで再現するWebアプリを提供する。Codex CLI (`codex exec --model gpt-5.1`) でペルソナ/評価基準/コンテキスト入りの自然文を生成し、そのテキストをアンカー文に対する埋め込み類似度（TF-IDFコサイン）で分布化する。Codexが生成するセッションJSONLをそのまま一覧・ダウンロードでき、年齢・性別別の集計や詳細レポートを提供する。
 
 ## Progress
 
@@ -13,10 +13,15 @@
 - [x] (2025-02-26 14:40Z) FastAPIエンドポイントとフロントエンド(UI, Chart.js, 画像Base64送信)を組み込み、SSRタスク実行フローを結合。
 - [x] (2025-02-26 14:55Z) 依存インストールと`python -m compileall app`による構文検証を実施。手動検証はサーバ起動手順に委ねる。
 - [x] (2025-02-27 10:10Z) ソーシャルゲーム運営向けの運営コンテキスト入力、プロンプトテンプレート管理、PDFレポート出力、サンプルデータ投入API、再現性設定(シード・計算手法)を追加し、UIを拡充。
+- [x] (2025-12-01 05:10Z) 既存実装の誤りを是正：Codex execを経由しないTF-IDFのみのパス、独自セッションJSON生成、計算説明不足を修正する。
+- [x] (2025-12-01 07:05Z) Codex exec(gpt-5.1)で自然文生成→埋め込み類似度計算のパイプラインへ一本化し、CodexのセッションJSONLをそのまま配布対象にする。
+- [x] (2025-12-01 07:40Z) PDF/評価ロジックをCodex出力に基づく計算過程へ更新し、UIとAPIで手法名・セッションパスを整合させる。
 
 ## Surprises & Discoveries
 
 - reportlabの日本語出力にはCIDフォント登録が必要なため、標準のHeiseiKakuGo-W5を登録してPDF生成を安定化させた。
+- Codex exec が生成するセッションJSONLとアプリ側の独自JSONが二重化していたが、配布対象をCodex側に統一することで解消。
+- Codex出力が日本語になるケースではアンカー（英語）とのTF-IDF類似度がフラットになりやすく、分布が均等になることを確認。アンカー多言語化や翻訳前処理が有効かもしれない。
 
 ## Decision Log
 
@@ -26,11 +31,14 @@
 - Decision: ソーシャルゲーム運営評価のため、タスクに運営コンテキスト(JSON)とプロンプトテンプレートIDを付与し、シード指定・類似度手法切替を許容する。
   Rationale: 再現性(論文追試)と運営シナリオごとの評価を両立し、研究者とマーケターが任意条件で予測生成できるようにする。
   Date/Author: 2025-02-27/assistant
+- Decision: Codex exec(gpt-5.1)で生成した自然文を必須経路とし、その出力をアンカーとのTF-IDFコサインで分布化する。CodexセッションJSONLを配布し、独自セッションファイル生成は廃止する。
+  Rationale: ユーザー要求「codex execでGPT-5.1」「セッションファイルはcodexが吐くものを配布」を満たし、二重保存や計算経路の不整合を解消する。
+  Date/Author: 2025-12-01/assistant
 
 ## Outcomes & Retrospective
 
-- SSRダッシュボードのフロント/バックエンドとジョブキューが整備され、ペルソナ・評価基準管理からセッションファイル生成まで一連の動線を構築した。構文検証は通過済み。今後は実サーバ起動での手動動作確認を行い、フィードバックに応じてUI/指標を磨く。
-- 運営コンテキストとPDFレポート出力により、ソーシャルゲーム施策の比較検証が行いやすくなった。引き続きモデル改善や実データ検証で精度を高める。
+- Codex exec(gpt-5.1)経路に一本化し、独自セッションJSON生成を廃止、CodexセッションJSONLの配布に統一できた。タスク失敗時はCodexエラーを明示し、フォールバックは明示的に`tfidf`/`uniform`を選ぶ方式とした。
+- PDFは「Codex text → TF-IDF → anchors」の計算過程と手法名を表示するよう更新済み。UI/APIは手法=codexをデフォルトとし、セッション一覧はCodexのJSONLを列挙する。
 
 ## Context and Orientation
 
@@ -46,8 +54,8 @@
 
 1. **環境/基盤整備**: Python依存( fastapi, uvicorn, sqlmodel, scikit-learn, python-multipart, jinja2, reportlab )を`requirements.txt`に定義。`app/`配下にFastAPIエントリ`main.py`、データモデル`models.py`、SSRロジック`ssr.py`、キュー/セッション管理`jobs.py`、PDF生成`reports.py`を配置。`templates/`と`static/`でUIを提供。
 2. **データモデルとSSRエンジン**: SQLiteファイル`app.db`に`Persona`、`Criterion`、`PromptTemplate`、`Task`、`Result`テーブルを定義。タスクへ運営コンテキスト(JSON)、プロンプトテンプレート参照、シード値、類似度手法を格納し、TF-IDFコサインを中心に分布計算を行う。
-3. **ジョブ/キュー処理**: `asyncio.Queue`で直列処理。タスク処理時に運営コンテキストとテンプレートをプロンプトへ統合し、結果を保存。完了時に`~/.codex/session/<year>/<month>/<day>/task-<id>.json`へリクエストと結果を保存し、PDF生成に必要な情報を保持。
-4. **APIとUI**: FastAPIでCRUDエンドポイント(ペルソナ、評価基準、プロンプトテンプレート、タスク作成、結果取得、集計取得、セッション閲覧/ダウンロード、PDFレポート)を提供。テンプレートでは運営コンテキスト入力、テンプレート選択、PDFダウンロードボタン、サンプルデータ投入を追加し、研究者/マーケターが直感的に任意条件で予測生成できるようにする。
+3. **ジョブ/キュー処理**: `asyncio.Queue`で直列処理。タスク処理時にCodex exec(gpt-5.1)で自然文を生成し、そのテキストをアンカーに対するTF-IDFコサインで分布化する。Codexが生成したセッションJSONLをそのまま配布対象とし、独自セッション書き込みは行わない。
+4. **APIとUI**: FastAPIでCRUDエンドポイント(ペルソナ、評価基準、プロンプトテンプレート、タスク作成、結果取得、集計取得、セッション閲覧/ダウンロード、PDFレポート)を提供。タスク詳細には使用手法=codexを明示し、`/api/sessions` は codex の `~/.codex/session/<year>/<month>/<day>/...jsonl` を列挙・ダウンロードする。PDFはCodex出力テキストと計算過程を表示する。
 5. **バリデーションと運用**: `uvicorn app.main:app --reload`で起動し、基本シナリオ(サンプル投入→ペルソナ/基準確認→運営コンテキスト付きタスク送信→PDFダウンロード)を確認。`python -m compileall app`で構文チェック。
 
 ## Concrete Steps

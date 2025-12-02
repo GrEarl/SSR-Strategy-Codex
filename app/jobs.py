@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from __future__ import annotations
-
 import asyncio
 import json
 from dataclasses import dataclass
@@ -11,6 +9,7 @@ from typing import Dict, List
 
 from sqlmodel import select
 
+from .codex_runner import CodexExecError, CodexSSRResult, run_codex_ssr
 from .models import (
     Criterion,
     Persona,
@@ -25,8 +24,9 @@ from .models import (
 from .ssr import DEFAULT_ANCHORS, compute_distribution, distribution_to_rating, synthesize_response
 
 
-SESSION_ROOT = Path.home() / ".codex" / "session"
-SESSION_ROOT.mkdir(parents=True, exist_ok=True)
+# Codex CLI writes session JSONL under ~/.codex/sessions/<year>/<month>/<day>/
+# (plural “sessions”). We also check singular for compatibility.
+SESSION_ROOTS = [Path.home() / ".codex" / "sessions", Path.home() / ".codex" / "session"]
 
 
 @dataclass
@@ -80,6 +80,7 @@ class JobManager:
         template: PromptTemplate | None = get_prompt_template(session, task.prompt_template_id)
         results: List[Result] = []
         combined_prompt = self._build_prompt(task, template)
+        method = task.similarity_method or "codex"
         try:
             for persona in personas:
                 persona_payload = {
@@ -91,25 +92,52 @@ class JobManager:
                 }
                 for criterion in criteria:
                     anchors = criterion.anchors or DEFAULT_ANCHORS
-                    response_text = synthesize_response(
-                        persona_payload,
-                        criterion.label,
-                        task.guidance,
-                        combined_prompt,
-                        task.operation_context,
-                        template.content if template else None,
-                        task.run_seed,
-                    )
-                    distribution = compute_distribution(
-                        response_text,
-                        anchors,
-                        method=task.similarity_method or "tfidf",
-                    )
-                    rating = distribution_to_rating(distribution)
+                    raw_note = ""
+                    if method == "codex":
+                        try:
+                            codex_res: CodexSSRResult = await asyncio.to_thread(
+                                run_codex_ssr,
+                                persona_payload,
+                                criterion.label,
+                                criterion.question,
+                                anchors,
+                                combined_prompt,
+                                task.guidance,
+                                task.operation_context,
+                                template.content if template else None,
+                                task.image_data,
+                                task.image_name,
+                            )
+                            response_text = codex_res.summary
+                            distribution = compute_distribution(response_text, anchors, method="tfidf")
+                            rating = distribution_to_rating(distribution)
+                            raw_note = f"[codex exec] {codex_res.raw_output[:240]}"
+                        except Exception as exc:  # noqa: BLE001
+                            task.status = "failed"
+                            task.error = f"codex exec failed: {exc}"
+                            session.add(task)
+                            session.commit()
+                            raise
+                    else:
+                        response_text = synthesize_response(
+                            persona_payload,
+                            criterion.label,
+                            task.guidance,
+                            combined_prompt,
+                            task.operation_context,
+                            template.content if template else None,
+                            task.run_seed,
+                        )
+                        distribution = compute_distribution(
+                            response_text,
+                            anchors,
+                            method=method,
+                        )
+                        rating = distribution_to_rating(distribution)
                     summary = (
                         f"{persona.name} ({persona.age}/{persona.gender}) evaluated {criterion.label}."
-                        f" {response_text}"
-                    )
+                        f" {response_text} {raw_note}"
+                    ).strip()
                     result = Result(
                         task_id=task.id,
                         persona_id=persona.id,
@@ -125,7 +153,6 @@ class JobManager:
             task.updated_at = datetime.utcnow()
             session.add(task)
             session.commit()
-            self._write_session_file(task, personas, criteria, template, results)
         except Exception as exc:  # noqa: BLE001
             task.status = "failed"
             task.error = str(exc)
@@ -162,87 +189,24 @@ class JobManager:
             base += f"\nTemplate: {template.name}"
         return base.strip() or "(no description)"
 
-    def _write_session_file(
-        self,
-        task: Task,
-        personas: List[Persona],
-        criteria: List[Criterion],
-        template: PromptTemplate | None,
-        results: List[Result],
-    ) -> Path:
-        now = datetime.utcnow()
-        session_dir = SESSION_ROOT / f"{now.year}" / f"{now.month:02d}" / f"{now.day:02d}"
-        session_dir.mkdir(parents=True, exist_ok=True)
-        payload: Dict[str, object] = {
-            "task": {
-                "id": task.id,
-                "title": task.title,
-                "status": task.status,
-                "stimulus_text": task.stimulus_text,
-                "image_name": task.image_name,
-                "persona_ids": task.persona_ids,
-                "criterion_ids": task.criterion_ids,
-                "guidance": task.guidance,
-                "session_label": task.session_label,
-                "operation_context": task.operation_context,
-                "prompt_template_id": task.prompt_template_id,
-                "similarity_method": task.similarity_method,
-                "run_seed": task.run_seed,
-                "created_at": task.created_at.isoformat(),
-            },
-            "personas": [
-                {
-                    "id": p.id,
-                    "name": p.name,
-                    "age": p.age,
-                    "gender": p.gender,
-                    "notes": p.notes,
-                }
-                for p in personas
-            ],
-            "criteria": [
-                {
-                    "id": c.id,
-                    "label": c.label,
-                    "question": c.question,
-                    "anchors": c.anchors,
-                }
-                for c in criteria
-            ],
-            "prompt_template": {
-                "id": template.id if template else None,
-                "name": template.name if template else None,
-                "content": template.content if template else None,
-            },
-            "results": [
-                {
-                    "persona_id": r.persona_id,
-                    "criterion_id": r.criterion_id,
-                    "distribution": r.distribution,
-                    "rating": r.rating,
-                    "summary": r.summary,
-                }
-                for r in results
-            ],
-        }
-        path = session_dir / f"task-{task.id}.json"
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        return path
-
 
 def list_session_files() -> List[Dict[str, str]]:
     files: List[Dict[str, str]] = []
-    for path in sorted(SESSION_ROOT.glob("**/task-*.json")):
-        rel = path.relative_to(SESSION_ROOT)
-        files.append({"path": str(rel), "updated": datetime.utcfromtimestamp(path.stat().st_mtime).isoformat()})
+    for root in SESSION_ROOTS:
+        if not root.exists():
+            continue
+        for path in sorted(root.glob("**/*.jsonl")):
+            rel = path.relative_to(root)
+            files.append({"path": str(rel), "updated": datetime.utcfromtimestamp(path.stat().st_mtime).isoformat()})
     return files
 
 
 def load_session_file(rel_path: str) -> Path:
-    resolved = (SESSION_ROOT / rel_path).resolve()
-    if not resolved.exists():
-        raise FileNotFoundError(rel_path)
-    return resolved
+    for root in SESSION_ROOTS:
+        candidate = (root / rel_path).resolve()
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError(rel_path)
 
 
 def aggregate_scores() -> List[Dict[str, object]]:

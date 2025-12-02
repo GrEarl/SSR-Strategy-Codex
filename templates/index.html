@@ -202,9 +202,10 @@
             </div>
           </div>
           <div class="inline">
-            <sl-select name="similarity_method" label="Similarity strategy" value="tfidf">
-              <sl-option value="tfidf">TF-IDF</sl-option>
-              <sl-option value="uniform">Uniform (baseline)</sl-option>
+            <sl-select name="similarity_method" label="Similarity strategy" value="codex">
+              <sl-option value="codex">Codex exec (GPT-5.1)</sl-option>
+              <sl-option value="tfidf">TF-IDF (fallback)</sl-option>
+              <sl-option value="uniform">Uniform (debug)</sl-option>
             </sl-select>
             <sl-input name="run_seed" label="Seed" type="number" min="0" placeholder="For reproducibility"></sl-input>
           </div>

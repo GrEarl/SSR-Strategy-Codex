@@ -429,7 +429,7 @@ taskForm.addEventListener("submit", async (e) => {
     persona_ids: personaIds,
     criterion_ids: criterionIds,
     prompt_template_id: templateIdRaw ? Number(templateIdRaw) : null,
-    similarity_method: formData.get("similarity_method") || "tfidf",
+    similarity_method: formData.get("similarity_method") || "codex",
     run_seed: formData.get("run_seed") ? Number(formData.get("run_seed")) : null,
     operation_context: {
       game_title: formData.get("game_title"),
