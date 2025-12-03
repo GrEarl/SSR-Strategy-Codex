@@ -16,12 +16,15 @@
 - [x] (2025-12-01 05:10Z) 既存実装の誤りを是正：Codex execを経由しないTF-IDFのみのパス、独自セッションJSON生成、計算説明不足を修正する。
 - [x] (2025-12-01 07:05Z) Codex exec(gpt-5.1)で自然文生成→埋め込み類似度計算のパイプラインへ一本化し、CodexのセッションJSONLをそのまま配布対象にする。
 - [x] (2025-12-01 07:40Z) PDF/評価ロジックをCodex出力に基づく計算過程へ更新し、UIとAPIで手法名・セッションパスを整合させる。
+- [x] (2025-12-02 22:45Z) SSR計算をSentenceTransformer埋め込み+コサインSoftmaxに変更し、Codexは自然文生成のみとした。requirements.txtへsentence-transformersを追加。
+- [x] (2025-12-02 18:20Z) SSR類似度をsoftmax化し、デフォルトアンカーをソシャゲ運営向けに変更。Codex execがOS権限エラーで動かないため、フォールバック(tfidf合成)許容とサンプル一括実行スクリプトを追加。
 
 ## Surprises & Discoveries
 
 - reportlabの日本語出力にはCIDフォント登録が必要なため、標準のHeiseiKakuGo-W5を登録してPDF生成を安定化させた。
 - Codex exec が生成するセッションJSONLとアプリ側の独自JSONが二重化していたが、配布対象をCodex側に統一することで解消。
 - Codex出力が日本語になるケースではアンカー（英語）とのTF-IDF類似度がフラットになりやすく、分布が均等になることを確認。アンカー多言語化や翻訳前処理が有効かもしれない。
+- Codex CLIが「failed to initialize rollout recorder: Operation not permitted」で起動不可。ローカル環境権限の問題と推測し、当座はtfidf合成でフォールバックさせた。
 
 ## Decision Log
 
@@ -34,6 +37,9 @@
 - Decision: Codex exec(gpt-5.1)で生成した自然文を必須経路とし、その出力をアンカーとのTF-IDFコサインで分布化する。CodexセッションJSONLを配布し、独自セッションファイル生成は廃止する。
   Rationale: ユーザー要求「codex execでGPT-5.1」「セッションファイルはcodexが吐くものを配布」を満たし、二重保存や計算経路の不整合を解消する。
   Date/Author: 2025-12-01/assistant
+- Decision: 類似度分布はcos類似度のsoftmaxに変更し、デフォルトアンカーをゲーム運営継続向けに統一。Codex execが権限エラーの場合は環境変数でtfidf合成フォールバックを許可する。
+  Rationale: 論文手法の確率分布化に合わせ、運営施策評価へドメイン適合させる。同時に実行不能でも最低限の分析を継続できるようにするため。
+  Date/Author: 2025-12-02/assistant
 
 ## Outcomes & Retrospective
 

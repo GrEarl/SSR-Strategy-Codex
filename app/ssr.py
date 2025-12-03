@@ -1,28 +1,44 @@
 from __future__ import annotations
 
 import math
+import os
 import random
 from typing import Dict, List, Sequence
 
+import numpy as np
+from sentence_transformers import SentenceTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 
-DEFAULT_ANCHORS = [
-    "I have no interest at all and see no reason to buy.",
-    "Not very appealing, though I might consider under certain conditions.",
-    "Neutral – it seems fine overall.",
-    "Generally positive; would purchase if prompted or discounted.",
-    "Extremely appealing and I actively want to purchase.",
+GAME_OPS_ANCHORS = [
+    "この施策ではプレイを継続しない。",
+    "やや魅力が足りず長くは続けない。",
+    "どちらとも言えず、今後の運営次第で決める。",
+    "わりと良いのでしばらくは続けたい。",
+    "とても魅力的で積極的に遊び続けたい。",
 ]
 
-GAME_OPS_ANCHORS = [
-    "The live-ops plans feel weak and I would not keep playing.",
-    "Some initiatives are interesting, but I would neither spend nor stay long term.",
-    "I could keep playing, but my impression depends on future operations.",
-    "Compelling enough that I would likely continue and consider spending.",
-    "Very attractive—I would actively continue and pay.",
+SPEND_ANCHORS = [
+    "全く課金する気はない。",
+    "大幅割引などがない限り課金したくない。",
+    "条件次第では少額なら課金してもよい。",
+    "報酬が維持されるならパスやガチャに課金したい。",
+    "早く進めるため積極的にプレミアム課金したい。",
 ]
+
+# デフォルトはソーシャルゲーム運営評価向けのアンカーを採用する
+DEFAULT_ANCHORS = GAME_OPS_ANCHORS
+
+_EMBED_MODEL = None
+
+
+def _get_embed_model() -> SentenceTransformer:
+    global _EMBED_MODEL
+    if _EMBED_MODEL is None:
+        # 軽量かつ汎用の多言語対応モデルを採用
+        _EMBED_MODEL = SentenceTransformer(os.getenv("SSR_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2"))
+    return _EMBED_MODEL
 
 
 def normalize_text(text: str) -> str:
@@ -36,20 +52,25 @@ def compute_distribution(text: str, anchors: Sequence[str], method: str = "tfidf
     if method == "uniform":
         return [round(1 / len(reference), 4) for _ in reference]
 
-    vectorizer = TfidfVectorizer()
-    matrix = vectorizer.fit_transform(reference + [stimulus])
-    ref_vectors = matrix[:-1]
-    stimulus_vec = matrix[-1]
-    sims = cosine_similarity(stimulus_vec, ref_vectors)[0]
-    min_sim = min(sims)
-    max_sim = max(sims)
-    if math.isclose(max_sim, min_sim):
-        return [round(1 / len(anchors), 4) for _ in anchors]
-    normalized = [(s - min_sim) / (max_sim - min_sim) for s in sims]
-    total = sum(normalized)
+    if method == "embed":
+        model = _get_embed_model()
+        emb = model.encode(reference + [stimulus], convert_to_numpy=True, normalize_embeddings=True)
+        ref_vectors = emb[:-1]
+        stim_vec = emb[-1]
+        sims = np.dot(ref_vectors, stim_vec)
+    else:  # tfidf
+        vectorizer = TfidfVectorizer()
+        matrix = vectorizer.fit_transform(reference + [stimulus])
+        ref_vectors = matrix[:-1]
+        stimulus_vec = matrix[-1]
+        sims = cosine_similarity(stimulus_vec, ref_vectors)[0]
+
+    max_sim = max(sims) if len(sims) else 0.0
+    exp_scores = [math.exp(s - max_sim) for s in sims]
+    total = sum(exp_scores)
     if total == 0:
         return [round(1 / len(anchors), 4) for _ in anchors]
-    return [round(v / total, 4) for v in normalized]
+    return [round(v / total, 4) for v in exp_scores]
 
 
 def distribution_to_rating(distribution: Sequence[float]) -> int:
@@ -67,7 +88,11 @@ def synthesize_response(
     template_text: str | None = None,
     run_seed: int | None = None,
 ) -> str:
-    rng = random.Random(run_seed)
+    seed_value = (run_seed or 0) + int(persona.get("id", 0))
+    rng = random.Random(seed_value)
+    anchors = SPEND_ANCHORS if "課金" in criterion_label else GAME_OPS_ANCHORS
+    stance_idx = rng.randint(1, len(anchors))
+    anchor_phrase = anchors[stance_idx - 1]
     demographic = f"{persona.get('age', '?')}-year-old {persona.get('gender', 'unknown')}"
     lead = rng.choice(
         [
@@ -114,5 +139,6 @@ def synthesize_response(
         f"{lead}, viewing this as a {demographic}. {stimulus} {guide_text}"
         f" {template_clause}"
         f" As a result, from the lens of {criterion_label} I feel {opinion}."
-        f" Ops context: {context_text}".strip()
+        f" Ops context: {context_text}. Likert stance clue: {anchor_phrase}"
+        f" (rating seed {stance_idx}).".strip()
     )

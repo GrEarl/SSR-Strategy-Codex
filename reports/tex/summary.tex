@@ -1,0 +1,73 @@
+
+\documentclass[11pt,a4paper]{article}
+\usepackage{fontspec}
+\usepackage{xeCJK}
+\setmainfont{Hiragino Sans}\setsansfont{Hiragino Sans}
+\setCJKmainfont{Hiragino Sans}
+\XeTeXlinebreaklocale "ja"
+\XeTeXlinebreakskip=0pt plus 1pt
+\usepackage[margin=18mm]{geometry}
+\usepackage{longtable}
+\usepackage{ltablex}
+\keepXColumns
+\usepackage{tabularx}
+\usepackage{booktabs}
+\usepackage[table]{xcolor}
+\definecolor{lightgray}{RGB}{245,245,245}
+\definecolor{barblue}{RGB}{37,99,235}
+\definecolor{bargray}{RGB}{230,230,230}
+\setlength{\parskip}{4pt}
+\setlength{\parindent}{0pt}
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.15}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcommand{\ratingbar}[1]{%
+  \begingroup
+  \color{barblue}\rule{#1mm}{3pt}%
+  \color{bargray}\rule{\dimexpr50mm-#1mm\relax}{3pt}%
+  \endgroup}
+
+\begin{document}
+\section*{Summary: strategy x criterion means}
+Tasks: 9\ Results: 3888\
+\begin{tabular}{p{90mm}p{40mm}}\toprule
+Strategy / Criterion & Mean \\ \\midrule
+
+戦略:α-1 | 継続意向 (n=216) & 2.66 \\
+
+戦略:α-1 | 課金意欲 (n=216) & 1.98 \\
+
+戦略:α-2 | 継続意向 (n=216) & 2.74 \\
+
+戦略:α-2 | 課金意欲 (n=216) & 1.94 \\
+
+戦略:α-3 | 継続意向 (n=216) & 2.57 \\
+
+戦略:α-3 | 課金意欲 (n=216) & 1.97 \\
+
+戦略:β-1 | 継続意向 (n=216) & 2.51 \\
+
+戦略:β-1 | 課金意欲 (n=216) & 1.96 \\
+
+戦略:β-2 | 継続意向 (n=216) & 2.47 \\
+
+戦略:β-2 | 課金意欲 (n=216) & 1.95 \\
+
+戦略:ψ-1 | 継続意向 (n=216) & 2.65 \\
+
+戦略:ψ-1 | 課金意欲 (n=216) & 2.10 \\
+
+戦略:ψ-2 | 継続意向 (n=216) & 2.62 \\
+
+戦略:ψ-2 | 課金意欲 (n=216) & 1.99 \\
+
+戦略:ψ-3 | 継続意向 (n=216) & 2.57 \\
+
+戦略:ψ-3 | 課金意欲 (n=216) & 1.99 \\
+
+戦略:ψ-4 | 継続意向 (n=216) & 2.55 \\
+
+戦略:ψ-4 | 課金意欲 (n=216) & 1.78 \\
+
+\bottomrule\end{tabular}
+\end{document}

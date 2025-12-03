@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import subprocess
 import textwrap
@@ -33,40 +34,24 @@ def _build_exec_prompt(
     operation_context: Dict[str, str] | None,
     template_text: str | None,
 ) -> str:
-    anchor_lines = "\n".join(f"{idx+1}. {normalize_text(a)}" for idx, a in enumerate(anchors))
-    context_lines = []
-    for key, label in [
-        ("game_title", "Game"),
-        ("genre", "Genre"),
-        ("target_metric", "Target KPI"),
-        ("liveops_cadence", "Cadence"),
-        ("monetization", "Monetization"),
-        ("seasonality", "Seasonality"),
-        ("notes", "Notes"),
-    ]:
-        value = (operation_context or {}).get(key)
-        if value:
-            context_lines.append(f"{label}:{value}")
-    ctx_text = " | ".join(context_lines) or "-"
-    guide_text = guidance or "-"
-    template_clause = normalize_text(template_text or "-")
     persona_line = f"{persona.get('name', 'Persona')} ({persona.get('age', '?')}/{persona.get('gender', '?')})"
-
+    persona_note = persona.get("notes") or "（詳細記載なし）"
+    ctx_lines = []
+    for key in ["game_title", "genre", "target_metric", "liveops_cadence", "monetization", "seasonality", "notes"]:
+        val = (operation_context or {}).get(key)
+        if val:
+            ctx_lines.append(str(val))
+    ctx_text = " | ".join(ctx_lines)
+    guide_text = guidance or ""
     return textwrap.dedent(
         f"""
-        You act as a semantic similarity rater for consumer research.
-        Respond AS JSON ONLY with keys: "summary" (one paragraph), "distribution" (5 floats summing to 1.0 in Likert order 1-5), "rating" (integer 1-5 equal to the argmax of distribution).
-        Persona: {persona_line}
-        Criterion: {criterion_label}
-        Question: {criterion_question}
-        Anchors (1=lowest,5=highest):
-        {anchor_lines}
-        Stimulus: {stimulus}
-        Guidance: {guide_text}
-        Ops context: {ctx_text}
-        Prompt template: {template_clause}
-        Produce human-like qualitative reasoning that aligns with the persona and anchors, then map it to the Likert distribution.
-        JSON only, no markdown fences.
+        あなたは以下のペルソナになりきり、「このゲームが今まさに次の運営施策を実施している状態」でプレイしている自分を想像してください。その状況下でのプレイ感情・行動意図を日本語で1〜2文（一行）だけ述べてください。数値・評価・箇条書き・マークダウンは禁止です。
+        ペルソナ: {persona_line}
+        ペルソナ詳細: {persona_note}
+        運営施策の内容: {stimulus}
+        補足ガイダンス: {guide_text}
+        運営コンテキスト: {ctx_text}
+        継続したい／課金したい／離脱したい等の動機や不安があれば具体的に触れてください。
         """
     ).strip()
 
@@ -101,33 +86,51 @@ def run_codex_ssr(
     image_name: str | None,
     timeout: int = 120,
 ) -> CodexSSRResult:
-    prompt = _build_exec_prompt(persona, criterion_label, criterion_question, anchors, stimulus, guidance, operation_context, template_text)
+    prompt = _build_exec_prompt(
+        persona, criterion_label, criterion_question, anchors, stimulus, guidance, operation_context, template_text
+    )
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
-        last_path = tmp_path / "last.txt"
         cmd = [
             "codex",
             "exec",
             "--model",
             "gpt-5.1",
             "--sandbox",
-            "read-only",
+            os.getenv("CODEX_SANDBOX", "danger-full-access"),
             "--color",
             "never",
             "--skip-git-repo-check",
-            "--output-last-message",
-            str(last_path),
+            "--json",
         ]
         if image_b64:
             img_path = _decode_image(image_b64, image_name, tmp_path)
             cmd.extend(["--image", str(img_path)])
-        cmd.append(prompt)
+        # 明示的にオプション終端を入れてプロンプトを確実に渡す
+        cmd.append("--")
+        cmd.append(prompt or "(no prompt)")
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        log_path = Path(os.getenv("CODEX_EXEC_LOG", "/tmp/codex-exec.log"))
+        log_path.write_text(
+            f"cmd={' '.join(cmd)}\nreturncode={result.returncode}\nstdout={result.stdout}\nstderr={result.stderr}\n",
+            encoding="utf-8",
+        )
         if result.returncode != 0:
-            raise CodexExecError(result.stderr.strip() or "codex exec failed")
-        if not last_path.exists():
-            raise CodexExecError("codex exec produced no last message")
-        raw = last_path.read_text(encoding="utf-8").strip()
-    payload = _extract_json(raw)
-    summary = normalize_text(str(payload.get("summary", "")))
-    return CodexSSRResult(summary=summary, raw_output=raw)
+            raise CodexExecError((result.stderr or result.stdout).strip() or "codex exec failed")
+        summary = ""
+        for ln in result.stdout.splitlines():
+            ln = ln.strip()
+            if not ln:
+                continue
+            try:
+                obj = json.loads(ln)
+            except json.JSONDecodeError:
+                continue
+            if obj.get("type") == "item.completed":
+                item = obj.get("item", {})
+                if item.get("type") == "agent_message":
+                    summary = item.get("text", "")
+        if not summary:
+            raise CodexExecError("codex exec returned no agent_message")
+    summary = normalize_text(summary)
+    return CodexSSRResult(summary=summary, raw_output=result.stdout.strip())

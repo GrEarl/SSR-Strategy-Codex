@@ -5,3 +5,4 @@ scikit-learn
 python-multipart
 jinja2
 reportlab
+sentence-transformers

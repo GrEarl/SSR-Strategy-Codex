@@ -5,7 +5,8 @@ import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+import os
+from typing import Callable, Dict, List, Optional
 
 from sqlmodel import select
 
@@ -26,7 +27,7 @@ from .ssr import DEFAULT_ANCHORS, compute_distribution, distribution_to_rating, 
 
 # Codex CLI writes session JSONL under ~/.codex/sessions/<year>/<month>/<day>/
 # (plural “sessions”). We also check singular for compatibility.
-SESSION_ROOTS = [Path.home() / ".codex" / "sessions", Path.home() / ".codex" / "session"]
+SESSION_ROOTS = [Path.home() / ".codex" / "sessions", Path.home() / ".codex" / "session", Path.cwd() / ".codex-local" / ".codex" / "sessions"]
 
 
 @dataclass
@@ -35,16 +36,64 @@ class QueueItem:
 
 
 class JobManager:
-    def __init__(self) -> None:
+    def __init__(self, *, total_units: int = 0, progress_callback: Optional[Callable[[Dict[str, object]], None]] = None) -> None:
         self.queue: asyncio.Queue[QueueItem] = asyncio.Queue()
-        self.worker_task: asyncio.Task | None = None
+        self.workers: List[asyncio.Task] = []
+        self.max_concurrency = max(1, int(os.getenv("SSR_MAX_CONCURRENCY", "4")))
+        # ペルソナ単位の同時実行数。明示指定がなければ全体のmaxと同一にする
+        self.persona_concurrency = max(1, int(os.getenv("SSR_PERSONA_CONCURRENCY", str(self.max_concurrency))))
+        self.total_units = max(0, total_units)
+        self.completed_units = 0
+        self.progress_cb = progress_callback
 
     async def start(self) -> None:
-        if self.worker_task is None:
-            self.worker_task = asyncio.create_task(self._worker())
+        if self.workers:
+            return
+        for _ in range(self.max_concurrency):
+            self.workers.append(asyncio.create_task(self._worker()))
+
+    async def stop(self) -> None:
+        if not self.workers:
+            return
+        for w in self.workers:
+            w.cancel()
+        await asyncio.gather(*self.workers, return_exceptions=True)
+        self.workers.clear()
 
     async def enqueue(self, task_id: int) -> None:
         await self.queue.put(QueueItem(task_id=task_id))
+
+    def _report_progress(
+        self,
+        *,
+        kind: str,
+        task: Task,
+        persona_name: str | None = None,
+        persona_index: int | None = None,
+        persona_total: int | None = None,
+        status: str | None = None,
+    ) -> None:
+        if kind == "persona_done":
+            self.completed_units += 1
+        if not self.progress_cb:
+            return
+        payload: Dict[str, object] = {
+            "kind": kind,
+            "task_id": task.id,
+            "task_title": task.title,
+            "global_done": self.completed_units,
+            "global_total": self.total_units or 1,
+            "queue_size": self.queue.qsize(),
+        }
+        if persona_name:
+            payload["persona_name"] = persona_name
+        if persona_index is not None:
+            payload["persona_index"] = persona_index
+        if persona_total is not None:
+            payload["persona_total"] = persona_total
+        if status:
+            payload["status"] = status
+        self.progress_cb(payload)
 
     async def _worker(self) -> None:
         while True:
@@ -78,89 +127,128 @@ class JobManager:
         personas = get_persona_map(session, task.persona_ids)
         criteria = get_criteria_map(session, task.criterion_ids)
         template: PromptTemplate | None = get_prompt_template(session, task.prompt_template_id)
-        results: List[Result] = []
         combined_prompt = self._build_prompt(task, template)
         method = task.similarity_method or "codex"
-        try:
-            for persona in personas:
-                persona_payload = {
-                    "id": persona.id,
-                    "name": persona.name,
-                    "age": persona.age,
-                    "gender": persona.gender,
-                    "notes": persona.notes,
-                }
-                for criterion in criteria:
-                    anchors = criterion.anchors or DEFAULT_ANCHORS
-                    raw_note = ""
-                    if method == "codex":
-                        try:
-                            codex_res: CodexSSRResult = await asyncio.to_thread(
-                                run_codex_ssr,
-                                persona_payload,
-                                criterion.label,
-                                criterion.question,
-                                anchors,
-                                combined_prompt,
-                                task.guidance,
-                                task.operation_context,
-                                template.content if template else None,
-                                task.image_data,
-                                task.image_name,
-                            )
-                            response_text = codex_res.summary
-                            distribution = compute_distribution(response_text, anchors, method="tfidf")
-                            rating = distribution_to_rating(distribution)
-                            raw_note = f"[codex exec] {codex_res.raw_output[:240]}"
-                        except Exception as exc:  # noqa: BLE001
-                            task.status = "failed"
-                            task.error = f"codex exec failed: {exc}"
-                            session.add(task)
-                            session.commit()
-                            raise
-                    else:
-                        response_text = synthesize_response(
-                            persona_payload,
-                            criterion.label,
-                            task.guidance,
-                            combined_prompt,
-                            task.operation_context,
-                            template.content if template else None,
-                            task.run_seed,
-                        )
-                        distribution = compute_distribution(
-                            response_text,
-                            anchors,
-                            method=method,
-                        )
-                        rating = distribution_to_rating(distribution)
-                    summary = (
-                        f"{persona.name} ({persona.age}/{persona.gender}) evaluated {criterion.label}."
-                        f" {response_text} {raw_note}"
-                    ).strip()
-                    result = Result(
-                        task_id=task.id,
-                        persona_id=persona.id,
-                        criterion_id=criterion.id,
-                        summary=summary,
-                        distribution=distribution,
-                        rating=rating,
+        fallback_on_error = os.getenv("CODEX_FALLBACK_ON_ERROR", "1") != "0"
+        persona_total = len(personas) or 1
+        persona_done = 0
+        persona_texts: List[tuple[Persona, str]] = []
+        persona_errors: List[str] = []
+
+        sem = asyncio.Semaphore(self.persona_concurrency)
+
+        async def generate_for_persona(persona: Persona) -> None:
+            nonlocal persona_done
+            persona_payload = {
+                "id": persona.id,
+                "name": persona.name,
+                "age": persona.age,
+                "gender": persona.gender,
+                "notes": persona.notes,
+            }
+            response_text = ""
+            try:
+                if method == "codex":
+                    codex_res: CodexSSRResult = await asyncio.to_thread(
+                        run_codex_ssr,
+                        persona_payload,
+                        "combined",
+                        "",
+                        [],
+                        combined_prompt,
+                        task.guidance,
+                        task.operation_context,
+                        template.content if template else None,
+                        task.image_data,
+                        task.image_name,
                     )
-                    session.add(result)
-                    results.append(result)
-            session.commit()
-            task.status = "completed"
-            task.updated_at = datetime.utcnow()
-            session.add(task)
-            session.commit()
-        except Exception as exc:  # noqa: BLE001
+                    response_text = codex_res.summary
+                else:
+                    response_text = synthesize_response(
+                        persona_payload,
+                        "combined",
+                        task.guidance,
+                        combined_prompt,
+                        task.operation_context,
+                        template.content if template else None,
+                        task.run_seed,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                if not fallback_on_error:
+                    raise
+                response_text = synthesize_response(
+                    persona_payload,
+                    "combined",
+                    task.guidance,
+                    combined_prompt,
+                    task.operation_context,
+                    template.content if template else None,
+                    task.run_seed,
+                )
+                persona_errors.append(f"codex exec failed for {persona.name}: {exc}")
+            finally:
+                persona_done += 1
+                self._report_progress(
+                    kind="persona_done",
+                    task=task,
+                    persona_name=persona.name,
+                    persona_index=persona_done,
+                    persona_total=persona_total,
+                )
+            persona_texts.append((persona, response_text))
+
+        tasks_async = [asyncio.create_task(self._limited(sem, generate_for_persona, persona)) for persona in personas]
+        errors: List[Exception] = []
+        for res in await asyncio.gather(*tasks_async, return_exceptions=True):
+            if isinstance(res, Exception):
+                errors.append(res)
+        if errors:
+            # 最初の例外のみ記録してタスクを失敗扱いにする
             task.status = "failed"
-            task.error = str(exc)
+            task.error = str(errors[0])
             task.updated_at = datetime.utcnow()
             session.add(task)
             session.commit()
-        finally:
             session.close()
+            return
+
+        results: List[Result] = []
+        for persona, response_text in persona_texts:
+            for criterion in criteria:
+                anchors = criterion.anchors or DEFAULT_ANCHORS
+                distribution = compute_distribution(
+                    response_text,
+                    anchors,
+                    method="embed" if method == "codex" else method,
+                )
+                rating = distribution_to_rating(distribution)
+                summary = (
+                    f"{persona.name} ({persona.age}/{persona.gender}) evaluated {criterion.label}."
+                    f" {response_text}"
+                ).strip()
+                result = Result(
+                    task_id=task.id,
+                    persona_id=persona.id,
+                    criterion_id=criterion.id,
+                    summary=summary,
+                    distribution=distribution,
+                    rating=rating,
+                )
+                session.add(result)
+                results.append(result)
+        session.commit()
+        if persona_errors:
+            task.error = "; ".join(persona_errors)
+        task.status = "completed"
+        task.updated_at = datetime.utcnow()
+        session.add(task)
+        session.commit()
+        self._report_progress(kind="task_done", task=task, status=task.status)
+        session.close()
+
+    async def _limited(self, sem: asyncio.Semaphore, func, *args, **kwargs):
+        async with sem:
+            return await func(*args, **kwargs)
 
     def _build_prompt(self, task: Task, template: PromptTemplate | None) -> str:
         base = task.stimulus_text or ""
